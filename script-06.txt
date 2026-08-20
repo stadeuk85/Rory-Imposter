@@ -1,0 +1,138 @@
+tn) return;
+    state.pack = btn.dataset.pack;
+    box.querySelectorAll('.pill').forEach(p => p.classList.toggle('on', p === btn));
+  });
+}
+function pickPack(key){
+  state.pack = key;
+  document.querySelectorAll('#catPills .pill').forEach(p => p.classList.toggle('on', p.dataset.pack === key));
+}
+document.querySelectorAll('#roundPills .pill').forEach(p => p.onclick = () => {
+  state.clueRounds = Number(p.dataset.rounds);
+  document.querySelectorAll('#roundPills .pill').forEach(x => x.classList.toggle('on', x === p));
+});
+document.querySelectorAll('#votePills .pill').forEach(p => p.onclick = () => {
+  state.voteMode = p.dataset.vote;
+  document.querySelectorAll('#votePills .pill').forEach(x => x.classList.toggle('on', x === p));
+  renderVoteNote();
+});
+function renderVoteNote(){
+  $('voteNote').textContent = state.voteMode === "secret"
+    ? "The phone goes round again and everyone votes on their own. Nobody can copy the loudest player."
+    : "Quicker: count down from three, everybody points, then tap the player who got pointed at most.";
+}
+document.querySelectorAll('#timePills .pill').forEach(p => p.onclick = () => {
+  state.timerSeconds = Number(p.dataset.time);
+  document.querySelectorAll('#timePills .pill').forEach(x => x.classList.toggle('on', x === p));
+});
+document.querySelectorAll('#readPills .pill').forEach(p => p.onclick = () => {
+  state.readAloud = p.dataset.read === "1";
+  document.querySelectorAll('#readPills .pill').forEach(x => x.classList.toggle('on', x === p));
+});
+
+/* ---------- custom words ---------- */
+function renderCustomCount(){
+  const n = parseCustom($('customText').value).length;
+  $('customCount').textContent = n + (n === 1 ? " word ready" : " words ready") + (n < 3 ? " — you need at least 3" : " ✔");
+  $('customSave').disabled = n < 3;
+}
+$('customBtn').onclick = () => { $('customText').value = state.customText; renderCustomCount(); show('s-custom'); };
+$('customText').addEventListener('input', renderCustomCount);
+$('customExample').onclick = () => { $('customText').value = EXAMPLE_WORDS; renderCustomCount(); };
+$('customClear').onclick = () => { $('customText').value = ""; renderCustomCount(); };
+$('customBack').onclick = () => show('s-home');
+$('customSave').onclick = () => {
+  state.customText = $('customText').value;
+  $('customPill').classList.remove('hidden');
+  pickPack("custom");
+  show('s-home');
+};
+
+/* ---------- picking the word ---------- */
+function pickSecret(){
+  let pool = [];
+  if(state.pack === "random"){
+    Object.entries(PACKS).forEach(([key,p]) =>
+      p.words.forEach(w => pool.push({word:w[0], clue:w[1], cat:p.name, emoji:p.emoji, key:key})));
+  } else {
+    const meta = packMeta(state.pack);
+    packWords(state.pack).forEach(w =>
+      pool.push({word:w[0], clue:w[1], cat:meta.name, emoji:meta.emoji, key:state.pack}));
+  }
+  let fresh = pool.filter(w => !state.used.has(w.word));
+  if(fresh.length === 0){ state.used.clear(); fresh = pool; }
+  const chosen = fresh[Math.floor(Math.random()*fresh.length)];
+  state.used.add(chosen.word);
+  return chosen;
+}
+
+/* ---------- start a round ---------- */
+function startRound(){
+  ensureArrays();
+  state.secret = pickSecret();
+  state.roles = new Array(state.playerCount).fill('crew');
+  shuffle([...Array(state.playerCount).keys()]).slice(0, state.imposterCount)
+    .forEach(i => state.roles[i] = 'imposter');
+  state.order = shuffle([...Array(state.playerCount).keys()]);
+  state.revealIndex = 0;
+  state.roundNo = 1;
+  state.picks = []; state.accused = []; state.ballots = [];
+  state.helpUsed = [];
+  state.resolved = false;
+  const others = packWords(state.secret.key).map(w => w[0]).filter(w => w !== state.secret.word);
+  state.shortlist = shuffle([state.secret.word].concat(shuffle(others).slice(0,2)));
+  showReveal();
+}
+function impostors(){ return state.roles.map((r,i) => r === 'imposter' ? i : -1).filter(i => i > -1); }
+
+/* ---------- reveal ---------- */
+function wordSize(w){ return w.length <= 9 ? 'xl' : (w.length <= 15 ? 'lg' : 'md'); }
+function showReveal(){
+  const i = state.revealIndex;
+  state.revealLevel = state.levels[i];
+  $('passName').textContent = playerName(i);
+  $('pack').classList.remove('is-open','imposter');
+  $('nextPlayerBtn').classList.add('hidden');
+  $('roleBody').innerHTML = "";
+  show('s-reveal');
+}
+function cardButtons(showHelp){
+  let h = '<div class="cardbtns">';
+  if(state.readAloud && canSpeak) h += '<button class="cardbtn" id="readBtn">🔊 READ IT TO ME</button>';
+  if(showHelp) h += '<button class="cardbtn" id="helpBtn">🙋 I NEED A BIGGER CLUE</button>';
+  return h + '</div>';
+}
+function renderCard(){
+  const s = state.secret, lv = state.revealLevel, body = $('roleBody');
+  const isImp = state.roles[state.revealIndex] === 'imposter';
+  if(!isImp){
+    body.innerHTML =
+      `<div class="the-word ${wordSize(s.word)}">${s.word}</div>` +
+      `<span class="cat-tag">${s.emoji} ${s.cat.toUpperCase()}</span>` +
+      `<p class="tip">Say one word that goes with this — but don't make it too easy for the imposter.</p>` +
+      cardButtons(false);
+    return;
+  }
+  const clueBox = `<div class="clue-box"><p class="eyebrow">YOUR CLUE</p><div class="clue">${s.clue}</div></div>`;
+  const packTag = `<span class="cat-tag">${s.emoji} ${s.cat.toUpperCase()}</span>`;
+  let h = `<span class="level-badge">${LEVELS[lv].face} ${LEVELS[lv].tag}</span>`;
+  if(lv === 4){
+    h += `<div class="clue-box"><p class="eyebrow">ALL YOU GET</p><div class="clue">${s.emoji} ${s.cat}</div></div>`
+       + `<p class="tip">No clue, and no asking for help. Let someone else go first, then bluff like mad.</p>`;
+  } else if(lv === 3){
+    h += clueBox + `<p class="tip">That's your lot — you don't even get the pack name. Listen hard.</p>`;
+  } else if(lv === 2){
+    h += clueBox + packTag + `<p class="tip">Everyone else knows the real word. Say something that fits your clue and blend in.</p>`;
+  } else {
+    h += clueBox + packTag
+       + `<div class="shortlist"><p class="eyebrow">IT'S ONE OF THESE THREE</p><div class="chips">`
+       + state.shortlist.map(w => `<span class="mini">${w}</span>`).join("")
+       + `</div></div>`
+       + `<p class="tip">Say something that would fit all three and nobody will know which one you mean.</p>`;
+  }
+  body.innerHTML = h + cardButtons(lv > 1 && lv < 4);
+}
+function cardSpeech(){
+  const s = state.secret, lv = state.revealLevel;
+  if(state.roles[state.revealIndex] !== 'imposter') return "Your secret word is. " + s.word;
+  if(lv === 4) return "You are the imposter 
