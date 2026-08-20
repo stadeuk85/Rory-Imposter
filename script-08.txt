@@ -1,0 +1,128 @@
+;
+  showResult();
+}
+$('tieAgain').onclick = startBallots;
+$('tieNobody').onclick = () => { state.accused = []; showResult(); };
+
+/* ---------- scoreboard ---------- */
+function paintScores(){
+  $('scoreCrew').textContent = state.scores.crew;
+  $('scoreImp').textContent = state.scores.imp;
+}
+function renderBoard(el){
+  const rows = [];
+  for(let i=0;i<state.playerCount;i++) rows.push({i, p: state.points[i] || 0});
+  rows.sort((a,b) => b.p - a.p);
+  const medals = ["🥇","🥈","🥉"];
+  el.innerHTML = rows.map((r,idx) => `
+    <div class="boardrow${idx === 0 && r.p > 0 ? ' lead' : ''}">
+      <span class="pos">${idx < 3 && r.p > 0 ? medals[idx] : (idx+1)+"."}</span>
+      <span>${playerName(r.i)}</span>
+      <span class="pts">${r.p}</span>
+    </div>`).join("");
+}
+$('scoreBtn').onclick = () => { renderBoard($('boardPanel')); show('s-scores'); };
+$('scoresBack').onclick = () => show('s-home');
+$('resetScoreBtn').onclick = () => {
+  state.scores = { crew:0, imp:0 };
+  state.points = new Array(state.playerCount).fill(0);
+  state.gamesPlayed = 0;
+  paintScores(); renderBoard($('boardPanel'));
+};
+
+/* ---------- result ---------- */
+function showResult(){
+  const imps = impostors();
+  const caughtAll = imps.length > 0 && imps.every(i => state.accused.includes(i));
+
+  $('rWord').textContent = state.secret.word;
+  $('rImp').textContent  = imps.map(playerName).join(" & ");
+  $('rVote').textContent = state.accused.length ? state.accused.map(playerName).join(" & ") : "Nobody";
+  $('rHelpRow').classList.toggle('hidden', state.helpUsed.length === 0);
+  if(state.helpUsed.length) $('rHelp').textContent = "🙋 " + state.helpUsed.map(playerName).join(" & ");
+
+  if(state.voteMode === "secret" && state.ballots.length){
+    renderTally($('resultTally'));
+    $('tallyPanel').classList.remove('hidden');
+  } else $('tallyPanel').classList.add('hidden');
+
+  // points
+  if(state.voteMode === "secret"){
+    state.ballots.forEach((v,i) => { if(v != null && imps.includes(v)) state.points[i]++; });
+  } else if(caughtAll){
+    for(let i=0;i<state.playerCount;i++) if(!imps.includes(i)) state.points[i]++;
+  }
+  if(!caughtAll) imps.forEach(i => state.points[i] += 2);
+
+  const banner = $('resultBanner');
+  $('guessPanel').classList.add('hidden');
+  $('resultActions').classList.add('hidden');
+  $('resultBoard').classList.add('hidden');
+  state.gamesPlayed++;
+
+  if(caughtAll){
+    banner.className = "banner win";
+    banner.textContent = "🔍 CAUGHT THEM!";
+    $('guessPrompt').textContent = imps.length === 1
+      ? "One last chance, imposter — say what you think the secret word was. Were you right?"
+      : "One last chance, imposters — between you, say what the secret word was. Right or wrong?";
+    $('guessPanel').classList.remove('hidden');
+    beep(660,120); setTimeout(()=>beep(880,200),150);
+  } else {
+    banner.className = "banner lose";
+    banner.textContent = state.accused.length ? "🕵️ THE IMPOSTER GOT AWAY!" : "🕵️ NOBODY WAS CAUGHT!";
+    state.scores.imp++;
+    finishResult();
+    beep(200,300);
+  }
+  show('s-result');
+}
+function finishResult(){
+  state.resolved = true;
+  paintScores();
+  renderBoard($('boardRows'));
+  $('resultBoard').classList.remove('hidden');
+  $('resultActions').classList.remove('hidden');
+}
+$('guessYes').onclick = () => {
+  if(state.resolved) return;
+  $('resultBanner').className = "banner lose";
+  $('resultBanner').textContent = "😱 CAUGHT — BUT THEY GUESSED IT!";
+  state.scores.imp++;
+  impostors().forEach(i => state.points[i] += 1);
+  $('guessPanel').classList.add('hidden');
+  finishResult();
+};
+$('guessNo').onclick = () => {
+  if(state.resolved) return;
+  $('resultBanner').className = "banner win";
+  $('resultBanner').textContent = "🏆 DETECTIVES WIN!";
+  state.scores.crew++;
+  $('guessPanel').classList.add('hidden');
+  finishResult();
+};
+$('nextRoundBtn').onclick = startRound;
+$('newGameBtn').onclick = () => { stopTimer(); show('s-home'); };
+
+/* ---------- nav ---------- */
+$('startBtn').onclick = () => {
+  if(state.pack === "custom" && parseCustom(state.customText).length < 3){
+    pickPack("random");
+  }
+  startRound();
+};
+$('rulesBtn').onclick = () => show('s-rules');
+$('rulesBack').onclick = () => show('s-home');
+$('soundBtn').onclick = () => {
+  state.sound = !state.sound;
+  $('soundBtn').textContent = state.sound ? "🔊" : "🔇";
+  $('soundBtn').setAttribute('aria-label', state.sound ? "Turn sound off" : "Turn sound on");
+  if(state.sound) beep(700,90);
+};
+
+/* ---------- boot ---------- */
+renderPacks();
+renderVoteNote();
+updatePlayerCount(0);
+paintScores();
+if(!canSpeak) document.querySelectorAll('#readPills .pill').forEach(p => p.disabled = true);
