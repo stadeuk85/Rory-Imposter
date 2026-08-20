@@ -1,0 +1,176 @@
+const LEVELS = {
+  1:{ tag:"LOADS OF HELP", face:"👶" },
+  2:{ tag:"NORMAL HELP",   face:"🙂" },
+  3:{ tag:"TRICKY",        face:"😩" },
+  4:{ tag:"SNEAKY",        face:"😈" }
+};
+const CUSTOM_META = { name:"Our own words", emoji:"✏️" };
+const EXAMPLE_WORDS =
+`Grandma's dog | A pet somebody in this room knows
+Our caravan | Somewhere this family has stayed
+Dad's snoring | A noise you hear at home
+The school run | Something that happens every morning
+Nana's roast potatoes | Food somebody here is famous for`;
+
+/* ---------- state ---------- */
+const state = {
+  playerCount: 5,
+  names: [],
+  levels: [],
+  points: [],
+  imposterCount: 1,
+  pack: "random",
+  customText: "",
+  clueRounds: 2,
+  voteMode: "secret",
+  readAloud: true,
+  timerSeconds: 120,
+  sound: true,
+  scores: { crew:0, imp:0 },
+  gamesPlayed: 0,
+  roles: [], secret: null, shortlist: [],
+  revealIndex: 0, revealLevel: 2, helpUsed: [],
+  order: [], roundNo: 1,
+  voterIndex: 0, ballots: [], picks: [], accused: [],
+  used: new Set(), resolved: false
+};
+
+/* ---------- helpers ---------- */
+const $ = id => document.getElementById(id);
+const screens = [...document.querySelectorAll('.screen')];
+function show(id){
+  screens.forEach(s => s.classList.toggle('is-active', s.id === id));
+  if(id === 's-home') $('scoreBtn').classList.toggle('hidden', state.gamesPlayed === 0);
+  if(id !== 's-reveal') stopSpeech();
+  window.scrollTo({top:0});
+}
+function defaultName(i){ return "Player " + (i+1); }
+function playerName(i){ return (state.names[i] || "").trim() || defaultName(i); }
+function shuffle(arr){
+  const a = arr.slice();
+  for(let i=a.length-1;i>0;i--){ const j = Math.floor(Math.random()*(i+1)); [a[i],a[j]]=[a[j],a[i]]; }
+  return a;
+}
+function beep(freq, ms){
+  if(!state.sound) return;
+  try{
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    if(!Ctx) return;
+    const ctx = new Ctx(), osc = ctx.createOscillator(), gain = ctx.createGain();
+    osc.type = "square"; osc.frequency.value = freq;
+    gain.gain.setValueAtTime(0.06, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + ms/1000);
+    osc.connect(gain); gain.connect(ctx.destination);
+    osc.start(); osc.stop(ctx.currentTime + ms/1000);
+    setTimeout(()=>ctx.close(), ms+120);
+  }catch(e){}
+}
+const canSpeak = ('speechSynthesis' in window);
+function speak(text){
+  if(!canSpeak) return;
+  try{
+    speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance(text);
+    u.lang = "en-GB"; u.rate = .85; u.pitch = 1.05;
+    speechSynthesis.speak(u);
+  }catch(e){}
+}
+function stopSpeech(){ if(canSpeak){ try{ speechSynthesis.cancel(); }catch(e){} } }
+
+/* ---------- word sources ---------- */
+function parseCustom(text){
+  return text.split("\n").map(l => l.trim()).filter(Boolean).map(l => {
+    const bits = l.split("|");
+    const w = bits[0].trim();
+    const c = (bits[1] || "").trim() || "Something from your own word pack";
+    return [w, c];
+  }).filter(x => x[0].length > 0);
+}
+function packWords(key){
+  return key === "custom" ? parseCustom(state.customText) : PACKS[key].words;
+}
+function packMeta(key){
+  return key === "custom" ? CUSTOM_META : { name:PACKS[key].name, emoji:PACKS[key].emoji };
+}
+
+/* ---------- setup: players ---------- */
+function ensureArrays(){
+  for(let i=0;i<state.playerCount;i++){
+    if(state.levels[i] == null) state.levels[i] = 2;
+    if(state.points[i] == null) state.points[i] = 0;
+  }
+}
+function renderPlayerRows(){
+  ensureArrays();
+  const box = $('playerRows');
+  box.innerHTML = "";
+  for(let i=0;i<state.playerCount;i++){
+    const row = document.createElement('div');
+    row.className = "prow";
+    const inp = document.createElement('input');
+    inp.type = "text"; inp.maxLength = 12;
+    inp.placeholder = defaultName(i);
+    inp.value = state.names[i] || "";
+    inp.setAttribute('aria-label', 'Name for player ' + (i+1));
+    inp.addEventListener('input', e => { state.names[i] = e.target.value; });
+    row.appendChild(inp);
+    const set = document.createElement('div');
+    set.className = "lvlset";
+    [1,2,3,4].forEach(lv => {
+      const b = document.createElement('button');
+      b.className = "lvl" + (state.levels[i] === lv ? " on" : "");
+      b.dataset.level = lv;
+      b.textContent = LEVELS[lv].face;
+      b.setAttribute('aria-label', playerName(i) + ": " + LEVELS[lv].tag);
+      b.onclick = () => { state.levels[i] = lv; renderPlayerRows(); beep(560,50); };
+      set.appendChild(b);
+    });
+    row.appendChild(set);
+    box.appendChild(row);
+  }
+}
+function updatePlayerCount(delta){
+  state.playerCount = Math.min(10, Math.max(3, state.playerCount + delta));
+  $('playerCount').textContent = state.playerCount;
+  const allowTwo = state.playerCount >= 6;
+  const twoBtn = document.querySelector('[data-imp="2"]');
+  twoBtn.disabled = !allowTwo;
+  if(!allowTwo && state.imposterCount === 2) setImposters(1);
+  $('impNote').textContent = allowTwo
+    ? "Two imposters makes it much trickier — they don't know who each other is!"
+    : "Two imposters needs 6 or more players.";
+  renderPlayerRows();
+}
+function setImposters(n){
+  state.imposterCount = n;
+  document.querySelectorAll('#impPills .pill').forEach(p => p.classList.toggle('on', Number(p.dataset.imp) === n));
+}
+$('minusPlayers').onclick = () => { updatePlayerCount(-1); beep(400,60); };
+$('plusPlayers').onclick  = () => { updatePlayerCount(1);  beep(600,60); };
+document.querySelectorAll('#impPills .pill').forEach(p => p.onclick = () => setImposters(Number(p.dataset.imp)));
+document.querySelectorAll('#setAll .lvl').forEach(b => b.onclick = () => {
+  const lv = Number(b.dataset.level);
+  for(let i=0;i<state.playerCount;i++) state.levels[i] = lv;
+  renderPlayerRows(); beep(620,70);
+});
+
+/* ---------- setup: options ---------- */
+function renderPacks(){
+  const box = $('catPills');
+  const all = document.createElement('button');
+  all.className = "pill on"; all.dataset.pack = "random";
+  all.textContent = "🎲 A bit of everything";
+  box.appendChild(all);
+  Object.entries(PACKS).forEach(([key,p]) => {
+    const b = document.createElement('button');
+    b.className = "pill"; b.dataset.pack = key;
+    b.textContent = p.emoji + " " + p.name;
+    box.appendChild(b);
+  });
+  const own = document.createElement('button');
+  own.className = "pill hidden"; own.dataset.pack = "custom"; own.id = "customPill";
+  own.textContent = "✏️ Our own words";
+  box.appendChild(own);
+  box.addEventListener('click', e => {
+    const btn = e.target.closest('.pill');
+    if(!b
